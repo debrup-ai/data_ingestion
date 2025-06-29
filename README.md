@@ -2,7 +2,7 @@
 
 <div align="center">
   
-![RAG Pipeline](docs/images/img_2.png)
+
 
 *A Retrieval Augmented Generation pipeline built with Apache Airflow and Qdrant*
 
@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
-
+![RAG Pipeline](docs/images/img_2.png)
 ## 🌟 Overview
 
 This project implements a Retrieval Augmented Generation (RAG) system using Apache Airflow for workflow orchestration and Qdrant as the vector database. The pipeline extracts text from PDFs, chunks it into manageable pieces, creates embeddings, and stores them in Qdrant for semantic search capabilities.
