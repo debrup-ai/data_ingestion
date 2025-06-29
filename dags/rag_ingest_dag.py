@@ -92,12 +92,17 @@ def load_to_qdrant(**context):
     with open(chunk_path, "r") as f:
         node_dicts = json.load(f)
 
-    nodes = [TextNode.from_dict(d) for d in node_dicts]
-    nodes_casted = cast(List[BaseNode], nodes)  # type-safe cast
+    # Convert all nodes to TextNodes
+    text_nodes = []
+    for node_dict in node_dicts:
+        text_node = TextNode.from_dict(node_dict)
+        text_nodes.append(text_node)
+    
+    print(f"[INFO] Loading {len(text_nodes)} nodes to Qdrant")
 
     loader = ToQdrantLoader(
     )
-    result = loader.load(nodes_casted)
+    result = loader.load(text_nodes)
     return result
 
 # -----------------------------
