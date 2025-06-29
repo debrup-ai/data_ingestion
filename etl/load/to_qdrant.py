@@ -1,51 +1,60 @@
-# to_qdrant.py
-
 from .base import BaseLoader
 from typing import List, Union
 from llama_index.core.schema import TextNode
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.core import VectorStoreIndex, StorageContext
-from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 from qdrant_client import QdrantClient
+import concurrent.futures
+import os
+from openai import AzureOpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
 
 class ToQdrantLoader(BaseLoader):
     def __init__(
         self,
-        azure_api_key: str,
-        azure_endpoint: str,
-        deployment_name: str,
         collection_name: str = "rag_chunks",
-        api_version: str = "2024-02-15-preview",
+        batch_size: int = 64,
+        parallel_workers: int = 4,
     ):
-        # Setup Azure embedder
-        self.embed_model = AzureOpenAIEmbedding(
-            model="text-embedding-ada-002",  # Must match deployed model
-            deployment_name=deployment_name,
-            api_key=azure_api_key,
-            azure_endpoint=azure_endpoint,
-            api_version=api_version,
+        self.client = AzureOpenAI(
+            api_key=AZURE_API_KEY,
+            api_version=AZURE_API_VERSION,
+            azure_endpoint=AZURE_ENDPOINT,
         )
+        self.deployment_name = DEPLOYMENT_NAME
 
-        # Setup Qdrant client and vector store
-        self.client = QdrantClient(url="http://localhost:6333")  # or remote URL
         self.vector_store = QdrantVectorStore(
-            client=self.client,
-            collection_name=collection_name
+            client=QdrantClient(url="http://localhost:6333"),
+            collection_name=collection_name,
+            batch_size=batch_size,
         )
+        self.parallel_workers = parallel_workers
+
+    def _embed_node(self, node: TextNode) -> TextNode:
+        text = node.get_content()
+        embedding = self.client.embeddings.create(
+            model=self.deployment_name,
+            input=text,
+        ).data[0].embedding
+        node.embedding = embedding
+        return node
 
     def load(self, data: List[Union[TextNode, dict]]):
-        nodes = [
+        nodes: List[TextNode] = [
             TextNode.from_dict(d) if isinstance(d, dict) else d
             for d in data
         ]
 
-        # Create index using Azure embedder and Qdrant vector store
-        storage_context = StorageContext.from_defaults(vector_store=self.vector_store)
-        index = VectorStoreIndex(
-            nodes=nodes,
-            storage_context=storage_context,
-            embed_model=self.embed_model,
-        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
+            embedded_nodes = list(executor.map(self._embed_node, nodes))
 
-        print(f"[SUCCESS] Uploaded {len(nodes)} nodes using AzureOpenAI embeddings to Qdrant")
-        return f"{len(nodes)} nodes embedded via Azure and stored"
+        # pyright: ignore
+        ids = self.vector_store.add(embedded_nodes)
+        print(f"[SUCCESS] Uploaded {len(ids)} embedded nodes to Qdrant")
+        return f"{len(ids)} nodes embedded and uploaded to Qdrant"

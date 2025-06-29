@@ -5,6 +5,9 @@ from datetime import timedelta
 import sys
 import os
 import json
+from typing import cast, List
+from llama_index.core.schema import BaseNode, TextNode
+
 
 # Setup sys.path to import from data_ingestion
 current_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else '/home/zudu/data_ingestion/rag_airflow/dags'
@@ -27,10 +30,9 @@ dag = DAG(
 )
 
 # -----------------------------
-# Task 1: Extract PDF to /tmp
+# Task 1: Extract PDF
 # -----------------------------
 def extract_pdf_data(**context):
-    print("[INFO] Starting PDF extraction...")
     from rag_airflow.etl.extract.from_pdf import DataExtractor
 
     conf = context.get('dag_run', {}).conf or {}
@@ -44,62 +46,62 @@ def extract_pdf_data(**context):
         print("[WARNING] No documents extracted")
         return "No documents extracted"
 
-    print(f"[SUCCESS] Extracted {len(documents)} documents")
-    print("[INFO] First document preview:")
-    print(documents[0].text[:200])  # Safe preview
-
-    # Write documents to disk (JSON)
     output_path = "/tmp/extracted_docs.json"
-    doc_dicts = [doc.to_dict() for doc in documents]
     with open(output_path, "w") as f:
-        json.dump(doc_dicts, f)
+        json.dump([doc.to_dict() for doc in documents], f)
 
-    # Pass file path to next task via XCom
     context['task_instance'].xcom_push(key='doc_path', value=output_path)
-    return f"Saved {len(doc_dicts)} docs to {output_path}"
+    return f"Saved {len(documents)} docs to {output_path}"
 
 # -----------------------------
-# Task 2: Chunk Documents from /tmp
+# Task 2: Chunk Documents
 # -----------------------------
 def chunk_documents(**context):
-    print("[INFO] Starting document chunking...")
     from rag_airflow.etl.transform.chunk import ChunkTransformer
     from llama_index.core.schema import Document
 
     ti = context['task_instance']
     doc_path = ti.xcom_pull(task_ids='extract_pdf_data', key='doc_path')
 
-    if not doc_path or not os.path.exists(doc_path):
-        print("[ERROR] Document path not found")
-        return "Missing input file"
-
     with open(doc_path, "r") as f:
-        doc_dicts = json.load(f)
-
-    documents = [Document.from_dict(d) for d in doc_dicts]
-    print(f"[INFO] Chunking {len(documents)} documents")
+        documents = [Document.from_dict(d) for d in json.load(f)]
 
     transformer = ChunkTransformer(chunk_size=200, chunk_overlap=50)
     nodes = transformer.transform(documents)
 
-    print(f"[SUCCESS] Created {len(nodes)} chunks")
-
-    # ✅ Print first node's content
     if nodes:
         print("[INFO] First node content:")
-        print(nodes[0].get_content()[:500])  # Safe truncate
+        print(nodes[0].get_content()[:500])
 
-    # Optionally write chunks to disk
     chunk_output_path = "/tmp/chunks.json"
-    node_dicts = [node.to_dict() for node in nodes]
     with open(chunk_output_path, "w") as f:
-        json.dump(node_dicts, f)
+        json.dump([node.to_dict() for node in nodes], f)
 
     ti.xcom_push(key='chunk_path', value=chunk_output_path)
     return f"Saved {len(nodes)} chunks to {chunk_output_path}"
 
 # -----------------------------
-# Task Definitions
+# Task 3: Load to Qdrant
+# -----------------------------
+def load_to_qdrant(**context):
+    from rag_airflow.etl.load.to_qdrant import ToQdrantLoader
+
+    ti = context['task_instance']
+    chunk_path = ti.xcom_pull(task_ids='chunk_documents', key='chunk_path')
+
+    with open(chunk_path, "r") as f:
+        node_dicts = json.load(f)
+
+    nodes = [TextNode.from_dict(d) for d in node_dicts]
+    nodes_casted = cast(List[BaseNode], nodes)  # type-safe cast
+
+    loader = ToQdrantLoader(
+    )
+    result = loader.load(nodes_casted)
+    return result
+
+# -----------------------------
+# DAG Task Definitions
 # -----------------------------
 pdf_task = PythonOperator(
     task_id='extract_pdf_data',
@@ -113,7 +115,13 @@ chunk_task = PythonOperator(
     dag=dag,
 )
 
-pdf_task >> chunk_task
+load_task = PythonOperator(
+    task_id='load_to_qdrant',
+    python_callable=load_to_qdrant,
+    dag=dag,
+)
+
+pdf_task >> chunk_task >> load_task
 
 if __name__ == "__main__":
     dag.test()
