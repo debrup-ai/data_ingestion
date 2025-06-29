@@ -2,7 +2,7 @@
 
 <div align="center">
   
-![RAG Pipeline](docs/images/img_1.png)
+![RAG Pipeline](docs/images/img_2.png)
 
 *A Retrieval Augmented Generation pipeline built with Apache Airflow and Qdrant*
 
