@@ -13,3 +13,4 @@ apache-airflow-providers-sqlite>=3.4.3
 pandas
 python-dotenv
 sqlalchemy
+firecrawl
